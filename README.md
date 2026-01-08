@@ -9,6 +9,10 @@ A Rust server for parsing CW spots from the [Reverse Beacon Network](https://www
 - **Async telnet client** - Non-blocking connection with auto-reconnect
 - **CW-focused filtering** - Built for CW operators, filters out RTTY/digital modes
 - **Band detection** - Automatic amateur band identification from frequency
+- **Configurable spot filters** - Match spots by callsign patterns, bands, SNR, WPM
+- **Prometheus metrics** - Export statistics for monitoring and alerting
+- **Spot storage** - Bounded per-filter queues with configurable limits
+- **REST API** - Cursor-based retrieval of stored spots
 
 ## Installation
 
@@ -24,12 +28,48 @@ cargo build --release
 
 ## Usage
 
+### Configuration
+
+Copy the example config to your config directory:
+
+```bash
+mkdir -p ~/.config/rbn-parser
+cp config.example.toml ~/.config/rbn-parser/config.toml
+```
+
+Then edit `~/.config/rbn-parser/config.toml` to set your callsign:
+
+```toml
+callsign = "W6JSV"
+
+# Enable Prometheus metrics and REST API
+metrics_enabled = true
+metrics_port = 9090
+
+# Spot filters - print spots matching any filter
+[[filters]]
+name = "my_calls"
+dx_call = "W6*"        # Wildcard prefix match
+
+[[filters]]
+name = "high_snr_20m"
+bands = ["20m"]
+min_snr = 20
+
+# Spot storage - keep recent matched spots in memory
+[storage]
+default_max_kept_entries = 50
+global_max_size = "10MB"
+```
+
+All fields are optional - defaults are used for any missing fields.
+
 ### Basic Usage
 
 Connect to RBN and start collecting statistics:
 
 ```bash
-rbn-parser --callsign W6JSV
+rbn-parser
 ```
 
 ### Command Line Options
@@ -38,18 +78,11 @@ rbn-parser --callsign W6JSV
 Usage: rbn-parser [OPTIONS]
 
 Options:
-  -c, --callsign <CALLSIGN>      Callsign to use for RBN login [env: RBN_CALLSIGN=] [default: N0CALL]
-      --host <HOST>              RBN server hostname [env: RBN_HOST=] [default: telnet.reversebeacon.net]
-      --port <PORT>              RBN server port [env: RBN_PORT=] [default: 7000]
-      --cw-only                  Only count CW spots (ignore RTTY) [default: true]
-  -s, --stats-interval <SECS>    Print statistics every N seconds [default: 30]
-  -v, --verbose                  Print each parsed spot
-      --log-level <LEVEL>        Log level (trace, debug, info, warn, error) [default: info]
-      --no-reconnect             Disable auto-reconnect
-      --connect-timeout <SECS>   Connection timeout in seconds [default: 30]
-      --max-runtime <SECS>       Maximum runtime in seconds (0 = unlimited) [default: 0]
-  -h, --help                     Print help
-  -V, --version                  Print version
+  -v, --verbose              Print each parsed spot
+      --log-level <LEVEL>    Log level (trace, debug, info, warn, error) [default: info]
+      --max-runtime <SECS>   Maximum runtime in seconds (0 = unlimited) [default: 0]
+  -h, --help                 Print help
+  -V, --version              Print version
 ```
 
 ### Examples
@@ -57,19 +90,81 @@ Options:
 Verbose mode showing each spot:
 
 ```bash
-rbn-parser -c W6JSV -v
+rbn-parser -v
 ```
 
 Run for 5 minutes and exit:
 
 ```bash
-rbn-parser -c W6JSV --max-runtime 300
+rbn-parser --max-runtime 300
 ```
 
-Custom stats interval:
+Debug logging:
 
 ```bash
-rbn-parser -c W6JSV --stats-interval 60
+rbn-parser --log-level debug
+```
+
+## Prometheus Metrics
+
+When `metrics_enabled = true`, an HTTP server exposes metrics at `http://localhost:9090/metrics`:
+
+```bash
+curl http://localhost:9090/metrics
+```
+
+Available metrics:
+- `rbn_uptime_seconds` - Time since parser started
+- `rbn_spots_total{mode="CW"}` - Total spots by mode
+- `rbn_spots_per_second` - Current processing rate
+- `rbn_spots_by_band_total{band="20m"}` - Spots by band
+- `rbn_snr_db{quantile="0.5"}` - SNR distribution
+- `rbn_wpm{quantile="0.5"}` - WPM distribution
+- `rbn_filter_stored_spots{filter="..."}` - Stored spots per filter
+- `rbn_filter_overflow_total{filter="..."}` - Evicted spots per filter
+- `rbn_storage_total_bytes` - Total storage usage
+
+## REST API
+
+When storage is configured, REST endpoints are available for retrieving stored spots:
+
+### List Filters
+
+```bash
+curl http://localhost:9090/spots/filters
+# ["my_calls", "high_snr_20m"]
+```
+
+### Get Spots
+
+```bash
+# Get all stored spots for a filter
+curl http://localhost:9090/spots/filter/my_calls
+
+# Response:
+{
+  "filter": "my_calls",
+  "spots": [
+    {"seq": 1, "spot": {"spotter": "EA5WU-#", "frequency_khz": 14025.0, ...}},
+    {"seq": 2, "spot": {"spotter": "K3LR-#", "frequency_khz": 7018.3, ...}}
+  ],
+  "latest_seq": 2,
+  "overflow_count": 0
+}
+```
+
+### Cursor-Based Polling
+
+Use the `since` parameter for efficient polling:
+
+```bash
+# First request - get all spots
+curl http://localhost:9090/spots/filter/my_calls
+# Returns latest_seq: 50
+
+# Subsequent requests - only get new spots
+curl "http://localhost:9090/spots/filter/my_calls?since=50"
+# Returns spots with seq > 50
 ```
 
 ## Spot Format
@@ -172,9 +267,13 @@ println!("{}", stats.summary());
 src/
 ├── lib.rs        # Library entry point
 ├── main.rs       # CLI application
+├── config.rs     # TOML configuration
 ├── spot.rs       # CwSpot data structure
 ├── parser.rs     # nom-based parser
+├── filter.rs     # Spot filtering
 ├── stats.rs      # Statistics collection
+├── storage.rs    # Spot storage queues
+├── metrics.rs    # Prometheus metrics & REST API
 └── client.rs     # Async telnet client
 ```
 
@@ -194,12 +293,10 @@ cargo bench
 
 ## Future Plans
 
-- [ ] HTTP API for recent spots
-- [ ] WebSocket streaming
-- [ ] Prometheus metrics export
-- [ ] Spot storage (SQLite/PostgreSQL)
-- [ ] Filtering by band/region
+- [ ] WebSocket streaming for real-time spot updates
+- [ ] Persistent storage (SQLite/PostgreSQL)
 - [ ] Real-time dashboard
+- [ ] Geographic/region-based filtering
 
 ## License
 
