@@ -64,12 +64,16 @@ async fn main() -> Result<()> {
     let stats = Arc::new(SpotStats::new());
 
     // Create spot storage if configured
-    let storage = config.storage.as_ref().map(|storage_config| {
-        Arc::new(SpotStorage::new(storage_config, config.filters.clone()))
-    });
+    let storage = config
+        .storage
+        .as_ref()
+        .map(|storage_config| Arc::new(SpotStorage::new(storage_config, config.filters.clone())));
 
     if storage.is_some() {
-        info!("Spot storage enabled with {} filter(s)", config.filters.len());
+        info!(
+            "Spot storage enabled with {} filter(s)",
+            config.filters.len()
+        );
     }
 
     // Start metrics server if enabled
@@ -78,7 +82,9 @@ async fn main() -> Result<()> {
         let storage_for_metrics = storage.clone();
         let metrics_port = config.metrics_port;
         tokio::spawn(async move {
-            if let Err(e) = start_metrics_server(metrics_port, stats_for_metrics, storage_for_metrics).await {
+            if let Err(e) =
+                start_metrics_server(metrics_port, stats_for_metrics, storage_for_metrics).await
+            {
                 error!("Failed to start metrics server: {}", e);
             }
         });

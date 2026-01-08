@@ -5,8 +5,8 @@
 //! Each spot is assigned a per-filter sequence number for cursor-based retrieval.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 
 use serde::Serialize;
 
@@ -264,8 +264,8 @@ impl SpotStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveTime;
     use crate::spot::{Mode, SpotType};
+    use chrono::NaiveTime;
 
     fn make_spot(dx_call: &str) -> CwSpot {
         CwSpot {

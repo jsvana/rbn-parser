@@ -4,8 +4,8 @@
 //! plus REST API endpoints for retrieving stored spots.
 
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 
 use axum::{
     Json, Router,
@@ -48,7 +48,10 @@ pub async fn start_metrics_server(
         .with_state(state);
 
     let listener = TcpListener::bind(addr).await?;
-    info!("Prometheus metrics server listening on http://{}/metrics", addr);
+    info!(
+        "Prometheus metrics server listening on http://{}/metrics",
+        addr
+    );
 
     axum::serve(listener, app)
         .await
@@ -310,7 +313,9 @@ fn format_storage_metrics(output: &mut String, storage: &SpotStorage) {
         storage.global_max_size()
     ));
 
-    output.push_str("# HELP rbn_storage_global_evictions_total Count of evictions due to global limit\n");
+    output.push_str(
+        "# HELP rbn_storage_global_evictions_total Count of evictions due to global limit\n",
+    );
     output.push_str("# TYPE rbn_storage_global_evictions_total counter\n");
     output.push_str(&format!(
         "rbn_storage_global_evictions_total {}\n",
@@ -374,11 +379,7 @@ mod tests {
             }
             // Should have metric name followed by value
             let parts: Vec<&str> = line.split_whitespace().collect();
-            assert!(
-                parts.len() >= 2,
-                "Invalid metric line: {}",
-                line
-            );
+            assert!(parts.len() >= 2, "Invalid metric line: {}", line);
         }
     }
 }

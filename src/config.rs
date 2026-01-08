@@ -268,7 +268,10 @@ mod tests {
         // With whitespace
         assert_eq!(parse_size("  10MB  ").unwrap(), 10 * 1024 * 1024);
         // Decimal
-        assert_eq!(parse_size("1.5MB").unwrap(), (1.5 * 1024.0 * 1024.0) as usize);
+        assert_eq!(
+            parse_size("1.5MB").unwrap(),
+            (1.5 * 1024.0 * 1024.0) as usize
+        );
     }
 
     #[test]

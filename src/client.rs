@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -161,12 +161,15 @@ impl RbnClient {
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
-        let mut line_buf = String::with_capacity(256);
 
-        // Wait for login prompt and send callsign
-        // The RBN server typically sends some welcome text and then expects a callsign
-        let mut login_sent = false;
-        let mut welcome_lines = 0;
+        // Phase 1: Handle login sequence
+        // The server sends "Please enter your call: " without a trailing newline,
+        // so we need to read bytes until we see the prompt
+        self.handle_login(&mut reader, &mut writer).await?;
+        let _ = tx.send(RbnEvent::Connected).await;
+
+        // Phase 2: Stream spot lines
+        let mut line_buf = String::with_capacity(256);
 
         loop {
             line_buf.clear();
@@ -183,31 +186,9 @@ impl RbnClient {
                     let line = line_buf.trim_end();
                     debug!("Received: {}", line);
 
-                    // Handle login sequence
-                    if !login_sent {
-                        welcome_lines += 1;
-
-                        // Look for callsign prompt or just send after a few lines
-                        if line.contains("call:")
-                            || line.contains("callsign")
-                            || line.contains("login")
-                            || welcome_lines >= 3
-                        {
-                            info!("Sending callsign: {}", self.config.callsign);
-                            writer
-                                .write_all(format!("{}\r\n", self.config.callsign).as_bytes())
-                                .await
-                                .context("Failed to send callsign")?;
-                            writer.flush().await?;
-                            login_sent = true;
-                            let _ = tx.send(RbnEvent::Connected).await;
-                        }
-                    } else {
-                        // After login, forward all lines
-                        if tx.send(RbnEvent::Line(line.to_string())).await.is_err() {
-                            // Receiver dropped
-                            return Ok(());
-                        }
+                    if tx.send(RbnEvent::Line(line.to_string())).await.is_err() {
+                        // Receiver dropped
+                        return Ok(());
                     }
                 }
                 Ok(Err(e)) => {
@@ -216,6 +197,106 @@ impl RbnClient {
                 Err(_) => {
                     warn!("Read timeout, connection may be stale");
                     return Err(anyhow::anyhow!("Read timeout"));
+                }
+            }
+        }
+    }
+
+    /// Handle the login sequence by reading bytes until we see the callsign prompt.
+    async fn handle_login<R, W>(&self, reader: &mut R, writer: &mut W) -> Result<()>
+    where
+        R: AsyncReadExt + Unpin,
+        W: AsyncWriteExt + Unpin,
+    {
+        let mut buf = Vec::with_capacity(1024);
+        let mut byte = [0u8; 1];
+
+        // Read until we see "call:" prompt (case-insensitive)
+        loop {
+            let read_result = timeout(self.config.connect_timeout, reader.read(&mut byte)).await;
+
+            match read_result {
+                Ok(Ok(0)) => {
+                    return Err(anyhow::anyhow!("Connection closed during login"));
+                }
+                Ok(Ok(_)) => {
+                    buf.push(byte[0]);
+
+                    // Check if we've received the login prompt
+                    // Looking for "call:" which appears in "Please enter your call:"
+                    if buf.len() >= 5 {
+                        let tail = String::from_utf8_lossy(&buf[buf.len() - 5..]);
+                        if tail.eq_ignore_ascii_case("call:") {
+                            debug!(
+                                "Login prompt received: {}",
+                                String::from_utf8_lossy(&buf).trim()
+                            );
+                            break;
+                        }
+                    }
+
+                    // Safety limit to avoid reading forever
+                    if buf.len() > 4096 {
+                        return Err(anyhow::anyhow!("No login prompt found in initial data"));
+                    }
+                }
+                Ok(Err(e)) => {
+                    return Err(e).context("Read error during login");
+                }
+                Err(_) => {
+                    return Err(anyhow::anyhow!("Timeout waiting for login prompt"));
+                }
+            }
+        }
+
+        // Send callsign
+        info!("Sending callsign: {}", self.config.callsign);
+        writer
+            .write_all(format!("{}\r\n", self.config.callsign).as_bytes())
+            .await
+            .context("Failed to send callsign")?;
+        writer.flush().await?;
+
+        // Read the post-login messages until we see the command prompt (ends with ">")
+        // e.g., "W6JSV de RELAY 08-Jan-2026 03:13Z >"
+        buf.clear();
+        loop {
+            let read_result = timeout(self.config.connect_timeout, reader.read(&mut byte)).await;
+
+            match read_result {
+                Ok(Ok(0)) => {
+                    return Err(anyhow::anyhow!("Connection closed after login"));
+                }
+                Ok(Ok(_)) => {
+                    buf.push(byte[0]);
+
+                    // Check for command prompt ending with ">"
+                    if byte[0] == b'>' {
+                        let response = String::from_utf8_lossy(&buf);
+                        for line in response.lines() {
+                            let trimmed = line.trim();
+                            if !trimmed.is_empty() {
+                                debug!("Login response: {}", trimmed);
+                            }
+                        }
+                        info!("Login complete");
+                        return Ok(());
+                    }
+
+                    // Safety limit
+                    if buf.len() > 4096 {
+                        // Assume login succeeded if we got this far
+                        debug!("No command prompt found, assuming login succeeded");
+                        return Ok(());
+                    }
+                }
+                Ok(Err(e)) => {
+                    return Err(e).context("Read error after login");
+                }
+                Err(_) => {
+                    // Timeout is OK here - server might not send a prompt
+                    debug!("Timeout after login, assuming success");
+                    return Ok(());
                 }
             }
         }
