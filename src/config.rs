@@ -99,14 +99,14 @@ pub struct Config {
     /// Only count CW spots (ignore RTTY/digital).
     pub cw_only: bool,
 
-    /// Print statistics every N seconds.
+    /// Print statistics every N seconds (0 = disabled).
     pub stats_interval: u64,
 
-    /// Enable Prometheus metrics HTTP endpoint.
-    pub metrics_enabled: bool,
+    /// Enable HTTP server (metrics, health, spot API).
+    pub server_enabled: bool,
 
-    /// Port for Prometheus metrics HTTP endpoint.
-    pub metrics_port: u16,
+    /// Port for HTTP server.
+    pub server_port: u16,
 
     /// Spot filters for selective output.
     pub filters: Vec<SpotFilter>,
@@ -126,8 +126,8 @@ impl Default for Config {
             reconnect: true,
             cw_only: true,
             stats_interval: 30,
-            metrics_enabled: false,
-            metrics_port: 9090,
+            server_enabled: false,
+            server_port: 9090,
             filters: Vec::new(),
             storage: None,
         }
@@ -206,8 +206,8 @@ mod tests {
             reconnect = false
             cw_only = false
             stats_interval = 60
-            metrics_enabled = true
-            metrics_port = 9091
+            server_enabled = true
+            server_port = 9091
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.callsign, "W6JSV");
@@ -218,8 +218,8 @@ mod tests {
         assert!(!config.reconnect);
         assert!(!config.cw_only);
         assert_eq!(config.stats_interval, 60);
-        assert!(config.metrics_enabled);
-        assert_eq!(config.metrics_port, 9091);
+        assert!(config.server_enabled);
+        assert_eq!(config.server_port, 9091);
     }
 
     #[test]
@@ -247,8 +247,8 @@ mod tests {
     #[test]
     fn test_default_metrics_disabled() {
         let config = Config::default();
-        assert!(!config.metrics_enabled);
-        assert_eq!(config.metrics_port, 9090);
+        assert!(!config.server_enabled);
+        assert_eq!(config.server_port, 9090);
         assert!(config.filters.is_empty());
     }
 

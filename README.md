@@ -42,9 +42,9 @@ Then edit `~/.config/rbn-parser/config.toml` to set your callsign:
 ```toml
 callsign = "W6JSV"
 
-# Enable Prometheus metrics and REST API
-metrics_enabled = true
-metrics_port = 9090
+# Enable HTTP server (metrics, health, spot API)
+server_enabled = true
+server_port = 9090
 
 # Spot filters - print spots matching any filter
 [[filters]]
@@ -107,7 +107,7 @@ rbn-parser --log-level debug
 
 ## Prometheus Metrics
 
-When `metrics_enabled = true`, an HTTP server exposes metrics at `http://localhost:9090/metrics`:
+When `server_enabled = true`, an HTTP server exposes metrics at `http://localhost:9090/metrics`:
 
 ```bash
 curl http://localhost:9090/metrics

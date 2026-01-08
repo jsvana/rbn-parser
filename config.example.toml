@@ -21,10 +21,10 @@ cw_only = true
 # Print statistics every N seconds
 stats_interval = 30
 
-# Prometheus metrics HTTP endpoint
-# When enabled, metrics available at http://localhost:<port>/metrics
-metrics_enabled = false
-metrics_port = 9090
+# HTTP server (metrics, health check, spot API)
+# Endpoints: /metrics, /health, /spots/filters, /spots/filter/{name}
+server_enabled = false
+server_port = 9090
 
 # Spot filters - print spots matching ANY filter
 # Within each filter, ALL conditions must match (AND logic)

@@ -76,16 +76,17 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Start metrics server if enabled
-    if config.metrics_enabled {
-        let stats_for_metrics = Arc::clone(&stats);
-        let storage_for_metrics = storage.clone();
-        let metrics_port = config.metrics_port;
+    // Start HTTP server if enabled
+    if config.server_enabled {
+        info!("HTTP server listening on port {}", config.server_port);
+        let stats_for_server = Arc::clone(&stats);
+        let storage_for_server = storage.clone();
+        let server_port = config.server_port;
         tokio::spawn(async move {
             if let Err(e) =
-                start_metrics_server(metrics_port, stats_for_metrics, storage_for_metrics).await
+                start_metrics_server(server_port, stats_for_server, storage_for_server).await
             {
-                error!("Failed to start metrics server: {}", e);
+                error!("Failed to start HTTP server: {}", e);
             }
         });
     }
@@ -113,16 +114,18 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Start stats printer
-    let stats_clone = Arc::clone(&stats);
+    // Start stats printer (disabled if stats_interval is 0)
     let stats_interval = config.stats_interval;
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(stats_interval));
-        loop {
-            interval.tick().await;
-            println!("\n{}", stats_clone.summary());
-        }
-    });
+    if stats_interval > 0 {
+        let stats_clone = Arc::clone(&stats);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(stats_interval));
+            loop {
+                interval.tick().await;
+                println!("\n{}", stats_clone.summary());
+            }
+        });
+    }
 
     // Configure and start RBN client
     let cw_only = config.cw_only;

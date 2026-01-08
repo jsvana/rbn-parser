@@ -48,10 +48,10 @@ pub async fn start_metrics_server(
         .with_state(state);
 
     let listener = TcpListener::bind(addr).await?;
-    info!(
-        "Prometheus metrics server listening on http://{}/metrics",
-        addr
-    );
+    info!("Server listening on http://{}", addr);
+    info!("  Metrics:    /metrics");
+    info!("  Health:     /health");
+    info!("  Spot API:   /spots/filters, /spots/filter/{{name}}");
 
     axum::serve(listener, app)
         .await
