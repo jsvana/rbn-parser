@@ -22,7 +22,7 @@ cw_only = true
 stats_interval = 30
 
 # HTTP server (metrics, health check, spot API)
-# Endpoints: /metrics, /health, /spots/filters, /spots/filter/{name}
+# Endpoints: /metrics, /health, /spots/filters, /spots/filters/{name}
 server_enabled = false
 server_port = 9090
 

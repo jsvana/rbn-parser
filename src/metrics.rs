@@ -44,14 +44,14 @@ pub async fn start_metrics_server(
         .route("/metrics", get(metrics_handler))
         .route("/health", get(health_handler))
         .route("/spots/filters", get(list_filters_handler))
-        .route("/spots/filter/{name}", get(get_spots_handler))
+        .route("/spots/filters/{name}", get(get_spots_handler))
         .with_state(state);
 
     let listener = TcpListener::bind(addr).await?;
     info!("Server listening on http://{}", addr);
     info!("  Metrics:    /metrics");
     info!("  Health:     /health");
-    info!("  Spot API:   /spots/filters, /spots/filter/{{name}}");
+    info!("  Spot API:   /spots/filters, /spots/filters/{{name}}");
 
     axum::serve(listener, app)
         .await

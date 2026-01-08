@@ -139,7 +139,7 @@ curl http://localhost:9090/spots/filters
 
 ```bash
 # Get all stored spots for a filter
-curl http://localhost:9090/spots/filter/my_calls
+curl http://localhost:9090/spots/filters/my_calls
 
 # Response:
 {
@@ -159,11 +159,11 @@ Use the `since` parameter for efficient polling:
 
 ```bash
 # First request - get all spots
-curl http://localhost:9090/spots/filter/my_calls
+curl http://localhost:9090/spots/filters/my_calls
 # Returns latest_seq: 50
 
 # Subsequent requests - only get new spots
-curl "http://localhost:9090/spots/filter/my_calls?since=50"
+curl "http://localhost:9090/spots/filters/my_calls?since=50"
 # Returns spots with seq > 50
 ```
 

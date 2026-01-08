@@ -5,7 +5,6 @@ use clap::Parser;
 use rbn_parser::{
     Config,
     client::{RbnClient, RbnClientConfig, RbnEvent},
-    filter::{SpotFilter, any_filter_matches},
     metrics::start_metrics_server,
     parser::{is_cw_spot, looks_like_spot, parse_spot},
     stats::SpotStats,
@@ -129,7 +128,6 @@ async fn main() -> Result<()> {
 
     // Configure and start RBN client
     let cw_only = config.cw_only;
-    let filters = config.filters;
     let client_config = RbnClientConfig {
         host: config.host,
         port: config.port,
@@ -157,7 +155,7 @@ async fn main() -> Result<()> {
             event = events.recv() => {
                 match event {
                     Some(RbnEvent::Line(line)) => {
-                        process_line(&line, &stats, cw_only, args.verbose, &filters, storage.as_deref());
+                        process_line(&line, &stats, cw_only, args.verbose, storage.as_deref());
                     }
                     Some(RbnEvent::Connected) => {
                         info!("Connected to RBN");
@@ -190,7 +188,6 @@ fn process_line(
     stats: &SpotStats,
     cw_only: bool,
     verbose: bool,
-    filters: &[SpotFilter],
     storage: Option<&SpotStorage>,
 ) {
     stats.record_bytes(line.len() as u64);
@@ -218,8 +215,8 @@ fn process_line(
                 storage.try_store(&spot);
             }
 
-            // Print if verbose or if spot matches any filter
-            if verbose || any_filter_matches(filters, &spot) {
+            // Print if verbose mode is enabled
+            if verbose {
                 println!("{}", spot);
             }
         }
@@ -238,9 +235,8 @@ mod tests {
     fn test_process_line_valid_spot() {
         let stats = SpotStats::new();
         let line = "DX de EA5WU-#:    7018.3  RW1M           CW    19 dB  18 WPM  CQ      2259Z";
-        let filters: Vec<SpotFilter> = vec![];
 
-        process_line(line, &stats, true, false, &filters, None);
+        process_line(line, &stats, true, false, None);
 
         assert_eq!(
             stats.total_spots.load(std::sync::atomic::Ordering::Relaxed),
@@ -252,9 +248,8 @@ mod tests {
     fn test_process_line_non_spot() {
         let stats = SpotStats::new();
         let line = "Welcome to the Reverse Beacon Network";
-        let filters: Vec<SpotFilter> = vec![];
 
-        process_line(line, &stats, true, false, &filters, None);
+        process_line(line, &stats, true, false, None);
 
         assert_eq!(
             stats
