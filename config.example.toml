@@ -1,0 +1,58 @@
+# RBN Parser configuration
+# Copy to ~/.config/rbn-parser/config.toml
+
+# Your amateur radio callsign for RBN login
+callsign = "N0CALL"
+
+# RBN server settings
+host = "telnet.reversebeacon.net"
+port = 7000
+
+# Connection timeouts (seconds)
+connect_timeout = 30
+read_timeout = 120
+
+# Automatically reconnect on disconnect
+reconnect = true
+
+# Only track CW spots (ignore RTTY/digital)
+cw_only = true
+
+# Print statistics every N seconds
+stats_interval = 30
+
+# Prometheus metrics HTTP endpoint
+# When enabled, metrics available at http://localhost:<port>/metrics
+metrics_enabled = false
+metrics_port = 9090
+
+# Spot filters - print spots matching ANY filter
+# Within each filter, ALL conditions must match (AND logic)
+# Multiple [[filters]] sections combine with OR logic
+
+# Example: Print spots for your own callsign
+# [[filters]]
+# dx_call = "W6JSV"
+
+# Example: Print strong signals on 20m and 40m
+# [[filters]]
+# bands = ["20m", "40m"]
+# min_snr = 20
+
+# Example: Print all W6 callsigns
+# [[filters]]
+# dx_call = "W6*"
+
+# Example: Print CQ calls from a specific spotter
+# [[filters]]
+# spotter = "EA5WU-#"
+# spot_types = ["CQ"]
+
+# Filter field reference:
+# - dx_call: DX callsign pattern (supports * wildcard for prefix/suffix)
+# - spotter: Spotter callsign pattern (supports * wildcard)
+# - bands: Array of bands ["160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"]
+# - modes: Array of modes ["CW", "RTTY", "FT8", "FT4", "PSK31"]
+# - spot_types: Array of types ["CQ", "BEACON", "NCDXF_BEACON"]
+# - min_snr / max_snr: SNR range in dB
+# - min_wpm / max_wpm: WPM range
