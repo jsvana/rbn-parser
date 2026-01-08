@@ -14,6 +14,9 @@ use crate::spot::{CwSpot, Mode, SpotType};
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct SpotFilter {
+    /// Optional name for this filter (used in metrics labels).
+    pub name: Option<String>,
+
     /// DX callsign pattern (supports `*` wildcard for prefix/suffix).
     pub dx_call: Option<String>,
 
@@ -40,6 +43,10 @@ pub struct SpotFilter {
 
     /// Maximum WPM.
     pub max_wpm: Option<u16>,
+
+    /// Maximum number of spots to keep in storage for this filter.
+    /// Overrides `default_max_kept_entries` from `[storage]` config.
+    pub max_kept_entries: Option<usize>,
 }
 
 impl SpotFilter {

@@ -26,10 +26,12 @@ pub mod metrics;
 pub mod parser;
 pub mod spot;
 pub mod stats;
+pub mod storage;
 
 pub use client::{RbnClient, RbnClientConfig, RbnEvent};
-pub use config::Config;
+pub use config::{Config, StorageConfig};
 pub use filter::{SpotFilter, any_filter_matches};
 pub use parser::{ParseError, is_cw_spot, looks_like_spot, parse_spot};
 pub use spot::{CwSpot, Mode, SpotType};
 pub use stats::{SpotStats, StatsSummary};
+pub use storage::SpotStorage;

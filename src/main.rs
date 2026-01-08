@@ -9,6 +9,7 @@ use rbn_parser::{
     metrics::start_metrics_server,
     parser::{is_cw_spot, looks_like_spot, parse_spot},
     stats::SpotStats,
+    storage::SpotStorage,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -62,12 +63,22 @@ async fn main() -> Result<()> {
     // Create shared statistics
     let stats = Arc::new(SpotStats::new());
 
+    // Create spot storage if configured
+    let storage = config.storage.as_ref().map(|storage_config| {
+        Arc::new(SpotStorage::new(storage_config, config.filters.clone()))
+    });
+
+    if storage.is_some() {
+        info!("Spot storage enabled with {} filter(s)", config.filters.len());
+    }
+
     // Start metrics server if enabled
     if config.metrics_enabled {
         let stats_for_metrics = Arc::clone(&stats);
+        let storage_for_metrics = storage.clone();
         let metrics_port = config.metrics_port;
         tokio::spawn(async move {
-            if let Err(e) = start_metrics_server(metrics_port, stats_for_metrics).await {
+            if let Err(e) = start_metrics_server(metrics_port, stats_for_metrics, storage_for_metrics).await {
                 error!("Failed to start metrics server: {}", e);
             }
         });
@@ -137,7 +148,7 @@ async fn main() -> Result<()> {
             event = events.recv() => {
                 match event {
                     Some(RbnEvent::Line(line)) => {
-                        process_line(&line, &stats, cw_only, args.verbose, &filters);
+                        process_line(&line, &stats, cw_only, args.verbose, &filters, storage.as_deref());
                     }
                     Some(RbnEvent::Connected) => {
                         info!("Connected to RBN");
@@ -171,6 +182,7 @@ fn process_line(
     cw_only: bool,
     verbose: bool,
     filters: &[SpotFilter],
+    storage: Option<&SpotStorage>,
 ) {
     stats.record_bytes(line.len() as u64);
 
@@ -191,6 +203,11 @@ fn process_line(
             }
 
             stats.record_spot(&spot);
+
+            // Store in spot storage if configured (storage has its own filters)
+            if let Some(storage) = storage {
+                storage.try_store(&spot);
+            }
 
             // Print if verbose or if spot matches any filter
             if verbose || any_filter_matches(filters, &spot) {
@@ -214,7 +231,7 @@ mod tests {
         let line = "DX de EA5WU-#:    7018.3  RW1M           CW    19 dB  18 WPM  CQ      2259Z";
         let filters: Vec<SpotFilter> = vec![];
 
-        process_line(line, &stats, true, false, &filters);
+        process_line(line, &stats, true, false, &filters, None);
 
         assert_eq!(
             stats.total_spots.load(std::sync::atomic::Ordering::Relaxed),
@@ -228,7 +245,7 @@ mod tests {
         let line = "Welcome to the Reverse Beacon Network";
         let filters: Vec<SpotFilter> = vec![];
 
-        process_line(line, &stats, true, false, &filters);
+        process_line(line, &stats, true, false, &filters, None);
 
         assert_eq!(
             stats

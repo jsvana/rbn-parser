@@ -11,6 +11,69 @@ use std::path::PathBuf;
 use crate::client::{RBN_HOST, RBN_PORT_CW};
 use crate::filter::SpotFilter;
 
+/// Configuration for spot storage.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    /// Default maximum entries per filter (used when filter doesn't specify).
+    pub default_max_kept_entries: usize,
+
+    /// Global maximum size for all stored spots (human-readable, e.g., "10MB").
+    #[serde(deserialize_with = "deserialize_size")]
+    pub global_max_size: usize,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            default_max_kept_entries: 50,
+            global_max_size: 10 * 1024 * 1024, // 10MB
+        }
+    }
+}
+
+/// Deserialize a human-readable size string like "10MB" into bytes.
+fn deserialize_size<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    parse_size(&s).map_err(serde::de::Error::custom)
+}
+
+/// Parse a human-readable size string into bytes.
+///
+/// Supports: B, KB, MB, GB (case-insensitive).
+/// Examples: "100", "500KB", "10MB", "1GB"
+pub fn parse_size(s: &str) -> Result<usize, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty size string".to_string());
+    }
+
+    let s_upper = s.to_ascii_uppercase();
+
+    // Find where the numeric part ends
+    let num_end = s_upper
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s_upper.len());
+
+    let (num_str, unit) = s_upper.split_at(num_end);
+    let num: f64 = num_str
+        .parse()
+        .map_err(|_| format!("invalid number in size: {}", s))?;
+
+    let multiplier: usize = match unit.trim() {
+        "" | "B" => 1,
+        "KB" | "K" => 1024,
+        "MB" | "M" => 1024 * 1024,
+        "GB" | "G" => 1024 * 1024 * 1024,
+        _ => return Err(format!("unknown size unit: {}", unit)),
+    };
+
+    Ok((num * multiplier as f64) as usize)
+}
+
 /// Application configuration loaded from TOML file.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -47,6 +110,9 @@ pub struct Config {
 
     /// Spot filters for selective output.
     pub filters: Vec<SpotFilter>,
+
+    /// Optional storage configuration for keeping recent matched spots.
+    pub storage: Option<StorageConfig>,
 }
 
 impl Default for Config {
@@ -63,6 +129,7 @@ impl Default for Config {
             metrics_enabled: false,
             metrics_port: 9090,
             filters: Vec::new(),
+            storage: None,
         }
     }
 }
@@ -183,5 +250,59 @@ mod tests {
         assert!(!config.metrics_enabled);
         assert_eq!(config.metrics_port, 9090);
         assert!(config.filters.is_empty());
+    }
+
+    #[test]
+    fn test_parse_size() {
+        assert_eq!(parse_size("100").unwrap(), 100);
+        assert_eq!(parse_size("100B").unwrap(), 100);
+        assert_eq!(parse_size("1KB").unwrap(), 1024);
+        assert_eq!(parse_size("1K").unwrap(), 1024);
+        assert_eq!(parse_size("10MB").unwrap(), 10 * 1024 * 1024);
+        assert_eq!(parse_size("10M").unwrap(), 10 * 1024 * 1024);
+        assert_eq!(parse_size("1GB").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size("1G").unwrap(), 1024 * 1024 * 1024);
+        // Case insensitive
+        assert_eq!(parse_size("10mb").unwrap(), 10 * 1024 * 1024);
+        assert_eq!(parse_size("10Mb").unwrap(), 10 * 1024 * 1024);
+        // With whitespace
+        assert_eq!(parse_size("  10MB  ").unwrap(), 10 * 1024 * 1024);
+        // Decimal
+        assert_eq!(parse_size("1.5MB").unwrap(), (1.5 * 1024.0 * 1024.0) as usize);
+    }
+
+    #[test]
+    fn test_parse_size_errors() {
+        assert!(parse_size("").is_err());
+        assert!(parse_size("abc").is_err());
+        assert!(parse_size("10TB").is_err()); // TB not supported
+    }
+
+    #[test]
+    fn test_parse_storage_config() {
+        let toml = r#"
+            callsign = "W6JSV"
+
+            [storage]
+            default_max_kept_entries = 100
+            global_max_size = "50MB"
+
+            [[filters]]
+            name = "w6_calls"
+            dx_call = "W6*"
+            max_kept_entries = 200
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let storage = config.storage.unwrap();
+        assert_eq!(storage.default_max_kept_entries, 100);
+        assert_eq!(storage.global_max_size, 50 * 1024 * 1024);
+        assert_eq!(config.filters[0].name, Some("w6_calls".to_string()));
+        assert_eq!(config.filters[0].max_kept_entries, Some(200));
+    }
+
+    #[test]
+    fn test_no_storage_config() {
+        let config = Config::default();
+        assert!(config.storage.is_none());
     }
 }

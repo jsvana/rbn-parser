@@ -1,15 +1,32 @@
-//! Prometheus metrics HTTP server.
+//! Prometheus metrics HTTP server and REST API for spot retrieval.
 //!
-//! Exposes RBN statistics in Prometheus text format via HTTP endpoint.
+//! Exposes RBN statistics in Prometheus text format via HTTP endpoint,
+//! plus REST API endpoints for retrieving stored spots.
 
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
-use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::info;
 
 use crate::stats::SpotStats;
+use crate::storage::{SpotStorage, StoredSpot};
+
+/// Shared state for the metrics server.
+#[derive(Clone)]
+pub struct MetricsState {
+    stats: Arc<SpotStats>,
+    storage: Option<Arc<SpotStorage>>,
+}
 
 /// Start the Prometheus metrics HTTP server.
 ///
@@ -18,13 +35,17 @@ use crate::stats::SpotStats;
 pub async fn start_metrics_server(
     port: u16,
     stats: Arc<SpotStats>,
+    storage: Option<Arc<SpotStorage>>,
 ) -> Result<(), std::io::Error> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let state = MetricsState { stats, storage };
 
     let app = Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/health", get(health_handler))
-        .with_state(stats);
+        .route("/spots/filters", get(list_filters_handler))
+        .route("/spots/filter/{name}", get(get_spots_handler))
+        .with_state(state);
 
     let listener = TcpListener::bind(addr).await?;
     info!("Prometheus metrics server listening on http://{}/metrics", addr);
@@ -40,8 +61,8 @@ async fn health_handler() -> impl IntoResponse {
 }
 
 /// Prometheus metrics endpoint.
-async fn metrics_handler(State(stats): State<Arc<SpotStats>>) -> impl IntoResponse {
-    let output = format_prometheus_metrics(&stats);
+async fn metrics_handler(State(state): State<MetricsState>) -> impl IntoResponse {
+    let output = format_prometheus_metrics(&state.stats, state.storage.as_deref());
     (
         StatusCode::OK,
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
@@ -49,8 +70,81 @@ async fn metrics_handler(State(stats): State<Arc<SpotStats>>) -> impl IntoRespon
     )
 }
 
+/// Query parameters for the get spots endpoint.
+#[derive(Deserialize)]
+struct GetSpotsQuery {
+    /// Return spots with sequence > this value.
+    since: Option<u64>,
+}
+
+/// Response for the get spots endpoint.
+#[derive(Serialize)]
+struct GetSpotsResponse {
+    /// Filter name.
+    filter: String,
+    /// List of spots with sequence numbers.
+    spots: Vec<StoredSpot>,
+    /// Latest sequence number in storage (0 if empty).
+    latest_seq: u64,
+    /// Count of spots evicted from this filter.
+    overflow_count: u64,
+}
+
+/// List available filter names.
+async fn list_filters_handler(State(state): State<MetricsState>) -> impl IntoResponse {
+    match &state.storage {
+        Some(storage) => {
+            let names = storage.filter_names();
+            (StatusCode::OK, Json(names)).into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Storage not configured"})),
+        )
+            .into_response(),
+    }
+}
+
+/// Get spots for a specific filter.
+async fn get_spots_handler(
+    State(state): State<MetricsState>,
+    Path(name): Path<String>,
+    Query(query): Query<GetSpotsQuery>,
+) -> impl IntoResponse {
+    let Some(storage) = &state.storage else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Storage not configured"})),
+        )
+            .into_response();
+    };
+
+    let Some(filter_storage_lock) = storage.get_filter_by_name(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Filter '{}' not found", name)})),
+        )
+            .into_response();
+    };
+
+    let filter_storage = filter_storage_lock.read().unwrap();
+    let since = query.since.unwrap_or(0);
+    let spots = filter_storage.get_spots_since(since);
+    let latest_seq = filter_storage.latest_seq();
+    let overflow_count = filter_storage.overflow_count.load(Relaxed);
+
+    let response = GetSpotsResponse {
+        filter: name,
+        spots,
+        latest_seq,
+        overflow_count,
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
+}
+
 /// Format statistics as Prometheus text format.
-fn format_prometheus_metrics(stats: &SpotStats) -> String {
+fn format_prometheus_metrics(stats: &SpotStats, storage: Option<&SpotStorage>) -> String {
     let summary = stats.summary();
     let mut output = String::with_capacity(4096);
 
@@ -153,7 +247,75 @@ fn format_prometheus_metrics(stats: &SpotStats) -> String {
         output.push_str(&format!("rbn_wpm_count {}\n", summary.total_spots));
     }
 
+    // Storage metrics (if storage is configured)
+    if let Some(storage) = storage {
+        format_storage_metrics(&mut output, storage);
+    }
+
     output
+}
+
+/// Format storage metrics in Prometheus text format.
+fn format_storage_metrics(output: &mut String, storage: &SpotStorage) {
+    // Per-filter metrics
+    output.push_str("# HELP rbn_filter_stored_spots Number of spots currently stored per filter\n");
+    output.push_str("# TYPE rbn_filter_stored_spots gauge\n");
+
+    output.push_str("# HELP rbn_filter_stored_bytes Bytes of stored spots per filter\n");
+    output.push_str("# TYPE rbn_filter_stored_bytes gauge\n");
+
+    output.push_str("# HELP rbn_filter_overflow_total Count of evicted spots per filter\n");
+    output.push_str("# TYPE rbn_filter_overflow_total counter\n");
+
+    output.push_str("# HELP rbn_filter_max_kept_entries Configured max entries per filter\n");
+    output.push_str("# TYPE rbn_filter_max_kept_entries gauge\n");
+
+    for (_, storage_lock) in storage.iter_storages() {
+        let fs = storage_lock.read().unwrap();
+        let name = &fs.name;
+
+        output.push_str(&format!(
+            "rbn_filter_stored_spots{{filter=\"{}\"}} {}\n",
+            name,
+            fs.len()
+        ));
+        output.push_str(&format!(
+            "rbn_filter_stored_bytes{{filter=\"{}\"}} {}\n",
+            name,
+            fs.current_size_bytes.load(Relaxed)
+        ));
+        output.push_str(&format!(
+            "rbn_filter_overflow_total{{filter=\"{}\"}} {}\n",
+            name,
+            fs.overflow_count.load(Relaxed)
+        ));
+        output.push_str(&format!(
+            "rbn_filter_max_kept_entries{{filter=\"{}\"}} {}\n",
+            name, fs.max_kept_entries
+        ));
+    }
+
+    // Global storage metrics
+    output.push_str("# HELP rbn_storage_total_bytes Total bytes across all filter storages\n");
+    output.push_str("# TYPE rbn_storage_total_bytes gauge\n");
+    output.push_str(&format!(
+        "rbn_storage_total_bytes {}\n",
+        storage.total_size_bytes.load(Relaxed)
+    ));
+
+    output.push_str("# HELP rbn_storage_global_max_bytes Configured global max storage size\n");
+    output.push_str("# TYPE rbn_storage_global_max_bytes gauge\n");
+    output.push_str(&format!(
+        "rbn_storage_global_max_bytes {}\n",
+        storage.global_max_size()
+    ));
+
+    output.push_str("# HELP rbn_storage_global_evictions_total Count of evictions due to global limit\n");
+    output.push_str("# TYPE rbn_storage_global_evictions_total counter\n");
+    output.push_str(&format!(
+        "rbn_storage_global_evictions_total {}\n",
+        storage.global_evictions.load(Relaxed)
+    ));
 }
 
 #[cfg(test)]
@@ -163,7 +325,7 @@ mod tests {
     #[test]
     fn test_format_prometheus_metrics_empty() {
         let stats = SpotStats::new();
-        let output = format_prometheus_metrics(&stats);
+        let output = format_prometheus_metrics(&stats, None);
 
         assert!(output.contains("rbn_uptime_seconds"));
         assert!(output.contains("rbn_parse_failures_total 0"));
@@ -192,7 +354,7 @@ mod tests {
         stats.record_spot(&spot);
         stats.record_bytes(100);
 
-        let output = format_prometheus_metrics(&stats);
+        let output = format_prometheus_metrics(&stats, None);
 
         assert!(output.contains("rbn_spots_total{mode=\"CW\"} 1"));
         assert!(output.contains("rbn_bytes_processed_total 100"));
@@ -203,7 +365,7 @@ mod tests {
     #[test]
     fn test_prometheus_format_validity() {
         let stats = SpotStats::new();
-        let output = format_prometheus_metrics(&stats);
+        let output = format_prometheus_metrics(&stats, None);
 
         // Check that each non-comment, non-empty line has proper format
         for line in output.lines() {
