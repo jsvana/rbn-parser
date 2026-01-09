@@ -81,11 +81,13 @@ pub struct SpotFilter {
     /// Optional name for this filter (used in metrics labels).
     pub name: Option<String>,
 
-    /// DX callsign pattern (supports `*` wildcard for prefix/suffix).
-    pub dx_call: Option<String>,
+    /// DX callsign patterns (supports `*` wildcard for prefix/suffix).
+    /// Accepts a single string or array of strings (OR logic within array).
+    pub dx_call: Option<PatternList>,
 
-    /// Spotter callsign pattern (supports `*` wildcard for prefix/suffix).
-    pub spotter: Option<String>,
+    /// Spotter callsign patterns (supports `*` wildcard for prefix/suffix).
+    /// Accepts a single string or array of strings (OR logic within array).
+    pub spotter: Option<PatternList>,
 
     /// Bands to match (e.g., "20m", "40m").
     pub bands: Option<Vec<String>>,
@@ -118,16 +120,18 @@ impl SpotFilter {
     ///
     /// All specified fields must match (AND logic).
     pub fn matches(&self, spot: &CwSpot) -> bool {
-        // Check dx_call pattern
-        if let Some(ref pattern) = self.dx_call
-            && !matches_wildcard(pattern, &spot.dx_call)
+        // Check dx_call patterns (OR logic within array)
+        if let Some(ref patterns) = self.dx_call
+            && !patterns.is_empty()
+            && !patterns.matches_any(&spot.dx_call)
         {
             return false;
         }
 
-        // Check spotter pattern
-        if let Some(ref pattern) = self.spotter
-            && !matches_wildcard(pattern, &spot.spotter)
+        // Check spotter patterns (OR logic within array)
+        if let Some(ref patterns) = self.spotter
+            && !patterns.is_empty()
+            && !patterns.matches_any(&spot.spotter)
         {
             return false;
         }
@@ -185,11 +189,15 @@ impl SpotFilter {
     ///
     /// Returns an error if any patterns are invalid.
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(ref pattern) = self.dx_call {
-            validate_wildcard_pattern(pattern)?;
+        if let Some(ref patterns) = self.dx_call {
+            for pattern in patterns.patterns() {
+                validate_wildcard_pattern(pattern)?;
+            }
         }
-        if let Some(ref pattern) = self.spotter {
-            validate_wildcard_pattern(pattern)?;
+        if let Some(ref patterns) = self.spotter {
+            for pattern in patterns.patterns() {
+                validate_wildcard_pattern(pattern)?;
+            }
         }
         Ok(())
     }
@@ -296,10 +304,10 @@ mod tests {
 
     #[test]
     fn test_filter_dx_call() {
-        let filter = SpotFilter {
-            dx_call: Some("W6*".to_string()),
-            ..Default::default()
-        };
+        let toml = r#"
+            dx_call = "W6*"
+        "#;
+        let filter: SpotFilter = toml::from_str(toml).unwrap();
 
         assert!(filter.matches(&make_spot("W6JSV", "EA5WU-#", 14025.0, 15, 20)));
         assert!(!filter.matches(&make_spot("K1ABC", "EA5WU-#", 14025.0, 15, 20)));
@@ -353,16 +361,19 @@ mod tests {
 
     #[test]
     fn test_any_filter_matches_or_logic() {
-        let filters = vec![
-            SpotFilter {
-                dx_call: Some("W6JSV".to_string()),
-                ..Default::default()
-            },
-            SpotFilter {
-                bands: Some(vec!["40m".to_string()]),
-                ..Default::default()
-            },
-        ];
+        let toml = r#"
+            [[filters]]
+            dx_call = "W6JSV"
+
+            [[filters]]
+            bands = ["40m"]
+        "#;
+        #[derive(Deserialize)]
+        struct TestConfig {
+            filters: Vec<SpotFilter>,
+        }
+        let config: TestConfig = toml::from_str(toml).unwrap();
+        let filters = config.filters;
 
         // Matches first filter
         assert!(any_filter_matches(
@@ -409,5 +420,29 @@ mod tests {
         let json = r#"[]"#;
         let list: PatternList = serde_json::from_str(json).unwrap();
         assert!(list.patterns().is_empty());
+    }
+
+    #[test]
+    fn test_filter_dx_call_array() {
+        let toml = r#"
+            dx_call = ["W6*", "K6*"]
+        "#;
+        let filter: SpotFilter = toml::from_str(toml).unwrap();
+
+        assert!(filter.matches(&make_spot("W6JSV", "EA5WU-#", 14025.0, 15, 20)));
+        assert!(filter.matches(&make_spot("K6ABC", "EA5WU-#", 14025.0, 15, 20)));
+        assert!(!filter.matches(&make_spot("N1ABC", "EA5WU-#", 14025.0, 15, 20)));
+    }
+
+    #[test]
+    fn test_filter_spotter_array() {
+        let toml = r#"
+            spotter = ["EA5*", "VE7*"]
+        "#;
+        let filter: SpotFilter = toml::from_str(toml).unwrap();
+
+        assert!(filter.matches(&make_spot("W6JSV", "EA5WU-#", 14025.0, 15, 20)));
+        assert!(filter.matches(&make_spot("W6JSV", "VE7ABC-#", 14025.0, 15, 20)));
+        assert!(!filter.matches(&make_spot("W6JSV", "K1ABC-#", 14025.0, 15, 20)));
     }
 }
