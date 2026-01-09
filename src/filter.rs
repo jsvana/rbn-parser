@@ -89,6 +89,13 @@ pub struct SpotFilter {
     /// Accepts a single string or array of strings (OR logic within array).
     pub spotter: Option<PatternList>,
 
+    /// URL to Ham2K PoLo notes file for loading callsigns.
+    /// Mutually exclusive with dx_call.
+    pub polo_notes_url: Option<String>,
+
+    /// Refresh interval for PoLo notes in seconds (default 1800 = 30 min, 0 = no refresh).
+    pub polo_refresh_secs: Option<u64>,
+
     /// Bands to match (e.g., "20m", "40m").
     pub bands: Option<Vec<String>>,
 
@@ -189,6 +196,21 @@ impl SpotFilter {
     ///
     /// Returns an error if any patterns are invalid.
     pub fn validate(&self) -> Result<(), String> {
+        // Check mutual exclusion of dx_call and polo_notes_url
+        if self.dx_call.is_some() && self.polo_notes_url.is_some() {
+            return Err(
+                "Cannot specify both 'dx_call' and 'polo_notes_url' on the same filter".to_string(),
+            );
+        }
+
+        // Validate polo_notes_url format
+        if let Some(ref url) = self.polo_notes_url
+            && !url.starts_with("http://")
+            && !url.starts_with("https://")
+        {
+            return Err(format!("polo_notes_url must be an HTTP(S) URL: {}", url));
+        }
+
         if let Some(ref patterns) = self.dx_call {
             for pattern in patterns.patterns() {
                 validate_wildcard_pattern(pattern)?;
@@ -444,5 +466,38 @@ mod tests {
         assert!(filter.matches(&make_spot("W6JSV", "EA5WU-#", 14025.0, 15, 20)));
         assert!(filter.matches(&make_spot("W6JSV", "VE7ABC-#", 14025.0, 15, 20)));
         assert!(!filter.matches(&make_spot("W6JSV", "K1ABC-#", 14025.0, 15, 20)));
+    }
+
+    #[test]
+    fn test_filter_polo_notes_url() {
+        let toml = r#"
+            polo_notes_url = "https://example.com/notes.txt"
+            polo_refresh_secs = 600
+            min_snr = 10
+        "#;
+        let filter: SpotFilter = toml::from_str(toml).unwrap();
+
+        assert_eq!(
+            filter.polo_notes_url,
+            Some("https://example.com/notes.txt".to_string())
+        );
+        assert_eq!(filter.polo_refresh_secs, Some(600));
+    }
+
+    #[test]
+    fn test_filter_polo_and_dx_call_exclusive() {
+        let toml = r#"
+            dx_call = "W6*"
+            polo_notes_url = "https://example.com/notes.txt"
+        "#;
+        let filter: SpotFilter = toml::from_str(toml).unwrap();
+
+        assert!(filter.validate().is_err());
+    }
+
+    #[test]
+    fn test_filter_polo_invalid_url() {
+        let filter: SpotFilter = toml::from_str(r#"polo_notes_url = "/local/path""#).unwrap();
+        assert!(filter.validate().is_err());
     }
 }
