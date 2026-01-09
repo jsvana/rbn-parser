@@ -5,6 +5,7 @@
 //! Each spot is assigned a per-filter sequence number for cursor-based retrieval.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 
@@ -12,6 +13,7 @@ use serde::Serialize;
 
 use crate::config::StorageConfig;
 use crate::filter::SpotFilter;
+use crate::polo::PoloNotesManager;
 use crate::spot::CwSpot;
 
 /// A spot with its sequence number for storage.
@@ -114,11 +116,23 @@ pub struct SpotStorage {
 
     /// Count of global evictions (evictions due to global_max_size).
     pub global_evictions: AtomicU64,
+
+    /// PoLo notes manager for callsign lookup (if any filter uses polo_notes_url).
+    polo_manager: Option<Arc<PoloNotesManager>>,
 }
 
 impl SpotStorage {
     /// Create a new spot storage from config.
-    pub fn new(config: &StorageConfig, filters: Vec<SpotFilter>) -> Self {
+    ///
+    /// # Arguments
+    /// * `config` - Storage configuration
+    /// * `filters` - List of spot filters
+    /// * `polo_manager` - Optional PoLo notes manager for callsign lookup
+    pub fn new(
+        config: &StorageConfig,
+        filters: Vec<SpotFilter>,
+        polo_manager: Option<Arc<PoloNotesManager>>,
+    ) -> Self {
         let filter_storages: Vec<_> = filters
             .into_iter()
             .enumerate()
@@ -140,6 +154,7 @@ impl SpotStorage {
             filters: filter_storages,
             total_size_bytes: AtomicUsize::new(0),
             global_evictions: AtomicU64::new(0),
+            polo_manager,
         }
     }
 
@@ -178,11 +193,13 @@ impl SpotStorage {
 
     /// Try to match a spot against all filters and store in matching ones.
     ///
+    /// Uses `matches_with_polo()` to include PoLo callsign matching if configured.
     /// Returns the indices of filters that matched.
     pub fn try_store(&self, spot: &CwSpot) -> Vec<usize> {
         let mut matched = Vec::new();
+        let polo_ref = self.polo_manager.as_ref().map(|m| m.as_ref());
         for (i, (filter, _)) in self.filters.iter().enumerate() {
-            if filter.matches(spot) {
+            if filter.matches_with_polo(spot, polo_ref) {
                 self.store_spot(i, spot.clone());
                 matched.push(i);
             }
@@ -301,7 +318,7 @@ mod tests {
 
         let filter: SpotFilter = toml::from_str(r#"dx_call = "W*""#).unwrap();
 
-        let storage = SpotStorage::new(&config, vec![filter]);
+        let storage = SpotStorage::new(&config, vec![filter], None);
 
         // Store 3 spots, should only keep 2
         storage.store_spot(0, make_spot("W1AW"));
@@ -332,7 +349,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = SpotStorage::new(&config, vec![filter1, filter2]);
+        let storage = SpotStorage::new(&config, vec![filter1, filter2], None);
 
         // Store 2 spots in filter 0
         storage.store_spot(0, make_spot("W1AW"));
@@ -356,7 +373,7 @@ mod tests {
         let filter1: SpotFilter = toml::from_str(r#"dx_call = "W6*""#).unwrap();
         let filter2: SpotFilter = toml::from_str(r#"bands = ["20m"]"#).unwrap();
 
-        let storage = SpotStorage::new(&config, vec![filter1, filter2]);
+        let storage = SpotStorage::new(&config, vec![filter1, filter2], None);
 
         // W6JSV on 20m matches both filters
         let spot = make_spot("W6JSV");
@@ -381,7 +398,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = SpotStorage::new(&config, vec![filter]);
+        let storage = SpotStorage::new(&config, vec![filter], None);
 
         // Store 3 spots
         storage.store_spot(0, make_spot("W1AW"));
@@ -429,7 +446,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = SpotStorage::new(&config, vec![filter1, filter2]);
+        let storage = SpotStorage::new(&config, vec![filter1, filter2], None);
 
         let names = storage.filter_names();
         assert_eq!(names.len(), 2);

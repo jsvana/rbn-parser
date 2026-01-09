@@ -7,6 +7,7 @@ use rbn_parser::{
     client::{RbnClient, RbnClientConfig, RbnEvent},
     metrics::start_metrics_server,
     parser::{is_cw_spot, looks_like_spot, parse_spot},
+    polo::PoloNotesManager,
     stats::SpotStats,
     storage::SpotStorage,
 };
@@ -59,14 +60,31 @@ async fn main() -> Result<()> {
         info!("Filters: {} configured", config.filters.len());
     }
 
+    // Initialize PoLo notes manager if any filters use polo_notes_url
+    let polo_manager = Arc::new(PoloNotesManager::from_filters(&config.filters));
+    if !polo_manager.is_empty() {
+        info!("PoLo notes: fetching initial callsigns...");
+        polo_manager.refresh_all().await;
+
+        // Start background refresh
+        let pm = Arc::clone(&polo_manager);
+        tokio::spawn(async move {
+            pm.start_background_refresh();
+        });
+    }
+
     // Create shared statistics
     let stats = Arc::new(SpotStats::new());
 
     // Create spot storage if configured
-    let storage = config
-        .storage
-        .as_ref()
-        .map(|storage_config| Arc::new(SpotStorage::new(storage_config, config.filters.clone())));
+    let storage = config.storage.as_ref().map(|storage_config| {
+        let pm = if polo_manager.is_empty() {
+            None
+        } else {
+            Some(Arc::clone(&polo_manager))
+        };
+        Arc::new(SpotStorage::new(storage_config, config.filters.clone(), pm))
+    });
 
     if storage.is_some() {
         info!(
