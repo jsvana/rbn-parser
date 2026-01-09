@@ -314,4 +314,45 @@ mod tests {
         let config = Config::default();
         assert!(config.storage.is_none());
     }
+
+    #[test]
+    fn test_parse_filters_with_arrays() {
+        let toml = r#"
+            callsign = "W6JSV"
+
+            [[filters]]
+            dx_call = ["W6*", "K6*", "N6*"]
+            min_snr = 10
+
+            [[filters]]
+            spotter = ["EA5*", "VE7*"]
+            bands = ["20m"]
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.filters.len(), 2);
+
+        let dx_patterns = config.filters[0].dx_call.as_ref().unwrap().patterns();
+        assert_eq!(dx_patterns, &["W6*", "K6*", "N6*"]);
+
+        let spotter_patterns = config.filters[1].spotter.as_ref().unwrap().patterns();
+        assert_eq!(spotter_patterns, &["EA5*", "VE7*"]);
+    }
+
+    #[test]
+    fn test_parse_filters_with_polo() {
+        let toml = r#"
+            callsign = "W6JSV"
+
+            [[filters]]
+            polo_notes_url = "https://example.com/notes.txt"
+            polo_refresh_secs = 600
+            bands = ["20m", "40m"]
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            config.filters[0].polo_notes_url,
+            Some("https://example.com/notes.txt".to_string())
+        );
+        assert_eq!(config.filters[0].polo_refresh_secs, Some(600));
+    }
 }
