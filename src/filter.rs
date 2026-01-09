@@ -4,8 +4,72 @@
 //! like callsign patterns, bands, SNR thresholds, etc.
 
 use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
+use std::fmt;
 
 use crate::spot::{CwSpot, Mode, SpotType};
+
+/// A list of patterns that deserializes from either a string or array.
+///
+/// Used for dx_call and spotter fields to allow both:
+/// - `dx_call = "W6*"` (single pattern)
+/// - `dx_call = ["W6*", "K6*"]` (multiple patterns with OR logic)
+#[derive(Debug, Clone, Default)]
+pub struct PatternList(Vec<String>);
+
+impl PatternList {
+    /// Get the patterns as a slice.
+    pub fn patterns(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Check if any pattern matches the value.
+    pub fn matches_any(&self, value: &str) -> bool {
+        self.0.iter().any(|p| matches_wildcard(p, value))
+    }
+
+    /// Check if the list is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'de> Deserialize<'de> for PatternList {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PatternListVisitor;
+
+        impl<'de> Visitor<'de> for PatternListVisitor {
+            type Value = PatternList;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string or array of strings")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<PatternList, E>
+            where
+                E: de::Error,
+            {
+                Ok(PatternList(vec![value.to_string()]))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<PatternList, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let mut patterns = Vec::new();
+                while let Some(value) = seq.next_element::<String>()? {
+                    patterns.push(value);
+                }
+                Ok(PatternList(patterns))
+            }
+        }
+
+        deserializer.deserialize_any(PatternListVisitor)
+    }
+}
 
 /// A filter for matching spots.
 ///
@@ -324,5 +388,26 @@ mod tests {
             &filters,
             &make_spot("W6JSV", "EA5WU-#", 14025.0, 15, 20)
         ));
+    }
+
+    #[test]
+    fn test_pattern_list_from_string() {
+        let json = r#""W6*""#;
+        let list: PatternList = serde_json::from_str(json).unwrap();
+        assert_eq!(list.patterns(), &["W6*"]);
+    }
+
+    #[test]
+    fn test_pattern_list_from_array() {
+        let json = r#"["W6*", "K6*", "N6*"]"#;
+        let list: PatternList = serde_json::from_str(json).unwrap();
+        assert_eq!(list.patterns(), &["W6*", "K6*", "N6*"]);
+    }
+
+    #[test]
+    fn test_pattern_list_empty_array() {
+        let json = r#"[]"#;
+        let list: PatternList = serde_json::from_str(json).unwrap();
+        assert!(list.patterns().is_empty());
     }
 }
