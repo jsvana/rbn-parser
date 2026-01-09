@@ -24,6 +24,7 @@ pub mod config;
 pub mod filter;
 pub mod metrics;
 pub mod parser;
+pub mod polo;
 pub mod spot;
 pub mod stats;
 pub mod storage;
