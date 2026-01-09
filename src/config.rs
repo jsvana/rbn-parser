@@ -236,7 +236,13 @@ mod tests {
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.filters.len(), 2);
-        assert_eq!(config.filters[0].dx_call, Some("W6*".to_string()));
+        assert_eq!(
+            config.filters[0]
+                .dx_call
+                .as_ref()
+                .map(|p| p.patterns().to_vec()),
+            Some(vec!["W6*".to_string()])
+        );
         assert_eq!(
             config.filters[1].bands,
             Some(vec!["20m".to_string(), "40m".to_string()])

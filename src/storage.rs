@@ -299,10 +299,7 @@ mod tests {
             global_max_size: 10 * 1024 * 1024, // 10MB, won't hit
         };
 
-        let filter = SpotFilter {
-            dx_call: Some("W*".to_string()),
-            ..Default::default()
-        };
+        let filter: SpotFilter = toml::from_str(r#"dx_call = "W*""#).unwrap();
 
         let storage = SpotStorage::new(&config, vec![filter]);
 
@@ -356,14 +353,8 @@ mod tests {
             global_max_size: 10 * 1024 * 1024,
         };
 
-        let filter1 = SpotFilter {
-            dx_call: Some("W6*".to_string()),
-            ..Default::default()
-        };
-        let filter2 = SpotFilter {
-            bands: Some(vec!["20m".to_string()]),
-            ..Default::default()
-        };
+        let filter1: SpotFilter = toml::from_str(r#"dx_call = "W6*""#).unwrap();
+        let filter2: SpotFilter = toml::from_str(r#"bands = ["20m"]"#).unwrap();
 
         let storage = SpotStorage::new(&config, vec![filter1, filter2]);
 
