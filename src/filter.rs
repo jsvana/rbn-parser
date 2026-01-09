@@ -192,6 +192,44 @@ impl SpotFilter {
         true
     }
 
+    /// Check if a spot's DX call matches the PoLo callsigns (if configured).
+    ///
+    /// Returns true if:
+    /// - No polo_notes_url configured, OR
+    /// - The DX call matches any cached PoLo callsign (exact, case-insensitive)
+    pub fn matches_polo(
+        &self,
+        spot: &CwSpot,
+        polo_manager: Option<&crate::polo::PoloNotesManager>,
+    ) -> bool {
+        let Some(ref url) = self.polo_notes_url else {
+            return true; // No PoLo URL configured, doesn't affect matching
+        };
+
+        let Some(manager) = polo_manager else {
+            return true; // No manager provided, can't check
+        };
+
+        let callsigns = manager.get_callsigns(url);
+        if callsigns.is_empty() {
+            return false; // No callsigns loaded yet
+        }
+
+        let dx_upper = spot.dx_call.to_uppercase();
+        callsigns.iter().any(|c| c == &dx_upper)
+    }
+
+    /// Check if a spot matches this filter, including PoLo callsigns.
+    ///
+    /// All specified fields must match (AND logic).
+    pub fn matches_with_polo(
+        &self,
+        spot: &CwSpot,
+        polo_manager: Option<&crate::polo::PoloNotesManager>,
+    ) -> bool {
+        self.matches(spot) && self.matches_polo(spot, polo_manager)
+    }
+
     /// Validate the filter configuration.
     ///
     /// Returns an error if any patterns are invalid.
